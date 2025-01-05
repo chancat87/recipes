@@ -1,11 +1,10 @@
-import json
 import os
 import re
-import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 from uuid import UUID
 
+import redis
 from django.apps import apps
 from django.conf import settings
 from django.contrib import messages
@@ -17,9 +16,9 @@ from django.core.management import call_command
 from django.db import models
 from django.http import HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.templatetags.static import static
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
+from django.utils.datetime_safe import date
 from django.utils.translation import gettext as _
 from django_scopes import scopes_disabled
 
@@ -30,7 +29,7 @@ from cookbook.models import Comment, CookLog, InviteLink, SearchFields, SearchPr
 from cookbook.tables import CookLogTable, ViewLogTable
 from cookbook.templatetags.theming_tags import get_theming_values
 from cookbook.version_info import VERSION_INFO
-from recipes.settings import BASE_DIR, PLUGINS
+from recipes.settings import PLUGINS
 
 
 def index(request):
@@ -41,7 +40,8 @@ def index(request):
             return HttpResponseRedirect(reverse_lazy('view_search'))
 
     try:
-        page_map = {UserPreference.SEARCH: reverse_lazy('view_search'), UserPreference.PLAN: reverse_lazy('view_plan'), UserPreference.BOOKS: reverse_lazy('view_books'), }
+        page_map = {UserPreference.SEARCH: reverse_lazy('view_search'), UserPreference.PLAN: reverse_lazy('view_plan'), UserPreference.BOOKS: reverse_lazy('view_books'),
+                    UserPreference.SHOPPING: reverse_lazy('view_shopping'), }
 
         return HttpResponseRedirect(page_map.get(request.user.userpreference.default_page))
     except UserPreference.DoesNotExist:
@@ -160,8 +160,7 @@ def recipe_view(request, pk, share=None):
         servings = recipe.servings
         if request.method == "GET" and 'servings' in request.GET:
             servings = request.GET.get("servings")
-        return render(request, 'recipe_view.html',
-                      {'recipe': recipe, 'comments': comments, 'comment_form': comment_form, 'share': share, 'servings': servings})
+        return render(request, 'recipe_view.html', {'recipe': recipe, 'comments': comments, 'comment_form': comment_form, 'share': share, 'servings': servings})
 
 
 @group_required('user')
@@ -172,16 +171,6 @@ def books(request):
 @group_required('user')
 def meal_plan(request):
     return render(request, 'meal_plan.html', {})
-
-
-@group_required('user')
-def supermarket(request):
-    return render(request, 'supermarket.html', {})
-
-
-@group_required('user')
-def view_profile(request, user_id):
-    return render(request, 'profile.html', {})
 
 
 @group_required('guest')
@@ -289,8 +278,11 @@ def shopping_settings(request):
 
 @group_required('guest')
 def history(request):
-    view_log = ViewLogTable(ViewLog.objects.filter(created_by=request.user, space=request.space).order_by('-created_at').all())
-    cook_log = CookLogTable(CookLog.objects.filter(created_by=request.user).order_by('-created_at').all())
+    view_log = ViewLogTable(ViewLog.objects.filter(created_by=request.user, space=request.space).order_by('-created_at').all(), prefix="viewlog-")
+    view_log.paginate(page=request.GET.get("viewlog-page", 1), per_page=25)
+
+    cook_log = CookLogTable(CookLog.objects.filter(created_by=request.user).order_by('-created_at').all(), prefix="cooklog-")
+    cook_log.paginate(page=request.GET.get("cooklog-page", 1), per_page=25)
     return render(request, 'history.html', {'view_log': view_log, 'cook_log': cook_log})
 
 
@@ -303,20 +295,24 @@ def system(request):
 
     if postgres:
         postgres_current = 16  # will need to be updated as PostgreSQL releases new major versions
-        from decimal import Decimal
 
         from django.db import connection
 
-        postgres_ver = Decimal(str(connection.pg_version).replace('00', '.'))
-        if postgres_ver >= postgres_current:
-            database_status = 'success'
-            database_message = _('Everything is fine!')
-        elif postgres_ver < postgres_current - 2:
+        try:
+            postgres_ver = divmod(connection.pg_version, 10000)[0]
+            if postgres_ver >= postgres_current:
+                database_status = 'success'
+                database_message = _('Everything is fine!')
+            elif postgres_ver < postgres_current - 2:
+                database_status = 'danger'
+                database_message = _('PostgreSQL %(v)s is deprecated.  Upgrade to a fully supported version!') % {'v': postgres_ver}
+            else:
+                database_status = 'info'
+                database_message = _('You are running PostgreSQL %(v1)s.  PostgreSQL %(v2)s is recommended') % {'v1': postgres_ver, 'v2': postgres_current}
+        except Exception as e:
+            print(f"Error determining PostgreSQL version: {e}")
             database_status = 'danger'
-            database_message = _('PostgreSQL %(v)s is deprecated.  Upgrade to a fully supported version!') % {'v': postgres_ver}
-        else:
-            database_status = 'info'
-            database_message = _('You are running PostgreSQL %(v1)s.  PostgreSQL %(v2)s is recommended') % {'v1': postgres_ver, 'v2': postgres_current}
+            database_message = _('Unable to determine PostgreSQL version.')
     else:
         database_status = 'info'
         database_message = _(
@@ -350,11 +346,51 @@ def system(request):
     for key in migration_info.keys():
         migration_info[key]['total'] = len(migration_info[key]['unapplied_migrations']) + len(migration_info[key]['applied_migrations'])
 
+    api_stats = None
+    api_space_stats = None
+    # API endpoint logging
+    if settings.REDIS_HOST:
+        r = redis.StrictRedis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            password='',
+            username='',
+            db=settings.REDIS_DATABASES['STATS'],
+        )
+
+        api_stats = [['Endpoint', 'Total']]
+        api_space_stats = [['User', 'Total']]
+        total_stats = ['All', int(r.get('api:request-count'))]
+
+        for i in range(0, 6):
+            d = (date.today() - timedelta(days=i)).isoformat()
+            api_stats[0].append(d)
+            api_space_stats[0].append(d)
+            total_stats.append(int(r.get(f'api:request-count:{d}')) if r.get(f'api:request-count:{d}') else 0)
+
+        api_stats.append(total_stats)
+
+        for x in r.zrange('api:endpoint-request-count', 0, -1, withscores=True, desc=True):
+            endpoint = x[0].decode('utf-8')
+            endpoint_stats = [endpoint, x[1]]
+            for i in range(0, 6):
+                d = (date.today() - timedelta(days=i)).isoformat()
+                endpoint_stats.append(r.zscore(f'api:endpoint-request-count:{d}', endpoint))
+            api_stats.append(endpoint_stats)
+
+        for x in r.zrange('api:space-request-count', 0, 20, withscores=True, desc=True):
+            s = x[0].decode('utf-8')
+            space_stats = [Space.objects.get(pk=s).name, x[1]]
+            for i in range(0, 6):
+                d = (date.today() - timedelta(days=i)).isoformat()
+                space_stats.append(r.zscore(f'api:space-request-count:{d}', s))
+            api_space_stats.append(space_stats)
+
     return render(
         request, 'system.html', {
             'gunicorn_media': settings.GUNICORN_MEDIA, 'debug': settings.DEBUG, 'postgres': postgres, 'postgres_version': postgres_ver, 'postgres_status': database_status,
             'postgres_message': database_message, 'version_info': VERSION_INFO, 'plugins': PLUGINS, 'secret_key': secret_key, 'orphans': orphans, 'migration_info': migration_info,
-            'missing_migration': missing_migration,
+            'missing_migration': missing_migration, 'allowed_hosts': settings.ALLOWED_HOSTS, 'api_stats': api_stats, 'api_space_stats': api_space_stats
         })
 
 
@@ -363,7 +399,8 @@ def setup(request):
         if User.objects.count() > 0 or 'django.contrib.auth.backends.RemoteUserBackend' in settings.AUTHENTICATION_BACKENDS:
             messages.add_message(
                 request, messages.ERROR,
-                _('The setup page can only be used to create the first user! If you have forgotten your superuser credentials please consult the django documentation on how to reset passwords.'
+                _('The setup page can only be used to create the first user! \
+                    If you have forgotten your superuser credentials please consult the django documentation on how to reset passwords.'
                   ))
             return HttpResponseRedirect(reverse('account_login'))
 
@@ -455,7 +492,7 @@ def web_manifest(request):
             theme_values['app_name'], "description":
             _("Manage recipes, shopping list, meal plans and more."), "icons":
             icons, "start_url":
-            "./search", "background_color":
+            "./", "background_color":
             theme_values['nav_bg_color'], "display":
             "standalone", "scope":
             ".", "theme_color":
@@ -463,7 +500,7 @@ def web_manifest(request):
             [{"name": _("Plan"), "short_name": _("Plan"), "description": _("View your meal Plan"), "url":
                 "./plan"}, {"name": _("Books"), "short_name": _("Books"), "description": _("View your cookbooks"), "url": "./books"},
              {"name": _("Shopping"), "short_name": _("Shopping"), "description": _("View your shopping lists"), "url":
-                 "./list/shopping-list/"}], "share_target": {"action": "/data/import/url", "method": "GET", "params": {"title": "title", "url": "url", "text": "text"}}
+                 "./shopping/"}], "share_target": {"action": "/data/import/url", "method": "GET", "params": {"title": "title", "url": "url", "text": "text"}}
     }
 
     return JsonResponse(manifest_info, json_dumps_params={'indent': 4})

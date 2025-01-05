@@ -54,7 +54,7 @@
                     text-field="name"
                     value-field="id"
                     v-model="food.supermarket_category"
-                    @change="detail_modal_visible = false; updateFoodCategory(food)"
+                    @input="detail_modal_visible = false; updateFoodCategory(food)"
                 ></b-form-select>
 
                 <b-button variant="info" block
@@ -238,7 +238,7 @@ export default {
 
                 if (e.recipe_mealplan !== null) {
                     let recipe_name = e.recipe_mealplan.recipe_name
-                    if (recipes.indexOf(recipe_name) === -1) {
+                    if (recipes.indexOf(recipe_name) === -1 && recipe_name !== undefined) {
                         recipes.push(recipe_name.substring(0, 14) + (recipe_name.length > 14 ? '..' : ''))
                     }
 
