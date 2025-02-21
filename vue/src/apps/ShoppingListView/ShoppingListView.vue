@@ -9,15 +9,15 @@
 
                 <b-tabs content-class="mt-2" v-model="current_tab" class="mt-md-1" style="margin-bottom: 20vh">
                     <template #tabs-end>
-                        <li class="nav-item flex-grow-1" >
+                        <li class="nav-item flex-grow-1">
 
                         </li>
-                        <li class="nav-item" >
+                        <li class="nav-item">
                             <a href="#" class="nav-link" @click="useShoppingListStore().undoChange()"> <i class="fas fa-undo fa-fw"></i>&nbsp;</a>
                         </li>
-                        <li class="nav-item dropdown d-none d-md-inline-block" >
+                        <li class="nav-item dropdown d-none d-md-inline-block">
                             <a class="nav-link dropdown-toggle" href="#" role="button" data-toggle="dropdown" aria-expanded="false">
-                                <i class="fas fa-download" ></i>&nbsp;
+                                <i class="fas fa-download"></i>&nbsp;
                             </a>
                             <div class="dropdown-menu">
                                 <DownloadPDF dom="#shoppinglist" name="shopping.pdf" :label="$t('download_pdf')"
@@ -34,7 +34,7 @@
                         </li>
                         <li class="nav-item">
                             <a href="#" class="nav-link" id="id_filters_button">
-                                <i  class="fas fa-filter fa-fw"/>&nbsp;
+                                <i class="fas fa-filter fa-fw"/>&nbsp;
                             </a>
                         </li>
                     </template>
@@ -59,7 +59,7 @@
                         <b-row class="d-lg-block d-print-none d-none mb-3 mt-3">
                             <b-col cols="12">
                                 <b-input-group>
-                                    <b-form-input type="text" :placeholder="$t('Food')"
+                                    <b-form-input type="text" :placeholder="$t('Shopping_input_placeholder')"
                                                   v-model="new_item.ingredient"
                                                   @keyup.enter="addItem"
                                                   ref="amount_input_simple"></b-form-input>
@@ -75,26 +75,25 @@
                         <!-- --------------------------------------- shopping list table -->
                         <b-row v-for="c in shopping_list_store.get_entries_by_group" v-bind:key="c.id">
                             <b-col cols="12"
-                                   v-if="c.count_unchecked > 0 || user_preference_store.device_settings.shopping_show_checked_entries && (c.count_unchecked + c.count_checked) > 0">
-                                <b-button-group class="w-100 mt-1"
-                                                :class="{'flex-row-reverse': useUserPreferenceStore().user_settings.left_handed}">
+                                v-if="(c.count_unchecked > 0 || user_preference_store.device_settings.shopping_show_checked_entries) 
+                                && (c.count_unchecked + c.count_checked) > 0 
+                                && (c.count_delayed_unchecked < c.count_unchecked || user_preference_store.device_settings.shopping_show_delayed_entries)"
+                            >
+                                <b-button-group class="w-100 mt-1" :class="{'flex-row-reverse': useUserPreferenceStore().user_settings.left_handed}">
                                     <b-button variant="info" block class="btn btn-block text-left">
-                                <span v-if="c.name === shopping_list_store.UNDEFINED_CATEGORY">{{
-                                        $t('Undefined')
-                                    }}</span>
+                                        <span v-if="c.name === shopping_list_store.UNDEFINED_CATEGORY">{{$t('Undefined')}}</span>
                                         <span v-else>{{ c.name }}</span>
                                     </b-button>
                                     <b-button class="d-print-none "
-                                              :class="{'btn-success':(c.count_unchecked > 0), 'btn-warning': (c.count_unchecked <= 0)}"
-                                              @click="checkGroup(c, (c.count_unchecked > 0))">
-                                        <i class="fas fa-fw"
-                                           :class="{'fa-check':(c.count_unchecked > 0), 'fa-cart-plus':(c.count_unchecked <= 0) }"></i>
+                                                :class="{'btn-success':(c.count_unchecked > 0), 'btn-warning': (c.count_unchecked <= 0)}"
+                                                @click="checkGroup(c, (c.count_unchecked > 0))">
+                                        <i class="fas fa-fw" :class="{'fa-check':(c.count_unchecked > 0), 'fa-cart-plus':(c.count_unchecked <= 0) }"></i>
                                     </b-button>
                                 </b-button-group>
 
                                 <span v-for="f in c.foods" v-bind:key="f.id">
-                            <shopping-line-item :entries="f['entries']" class="mt-1"/>
-                        </span>
+                                    <shopping-line-item :entries="f['entries']" class="mt-1"/>
+                                </span>
                             </b-col>
                         </b-row>
 
@@ -351,7 +350,7 @@
                         <template #title>
                             <div class="d-print-none">
                                 <i class="fas fa-user-cog fa-fw"></i>
-<!--                                <span class="d-none d-lg-inline-block ml-1">{{ $t('Settings') }}</span>-->
+                                <!--                                <span class="d-none d-lg-inline-block ml-1">{{ $t('Settings') }}</span>-->
                             </div>
                         </template>
                         <div class="row justify-content-center">
@@ -430,7 +429,7 @@
                     <b-col cols="12">
                         <template v-if="current_tab===0">
                             <b-input-group>
-                                <b-form-input v-model="new_item.ingredient" :placeholder="$t('Food')"
+                                <b-form-input v-model="new_item.ingredient" :placeholder="$t('Shopping_input_placeholder')"
                                               @keyup.enter="addItem"></b-form-input>
                                 <b-input-group-append>
                                     <b-button @click="addItem" variant="success">
@@ -562,6 +561,19 @@ export default {
         this.shopping_list_store.refreshFromAPI()
         useUserPreferenceStore().loadUserSettings(true)
         useUserPreferenceStore().loadDeviceSettings()
+
+        // update selected supermarkt because local setting become stale otherwise
+        if (useUserPreferenceStore().device_settings.shopping_selected_supermarket != null) {
+            let api = new ApiApiFactory()
+            api.retrieveSupermarket(useUserPreferenceStore().device_settings.shopping_selected_supermarket.id).then(r => {
+                useUserPreferenceStore().device_settings.shopping_selected_supermarket = r.data
+                useUserPreferenceStore().updateDeviceSettings()
+            }).catch(err => {
+                useUserPreferenceStore().device_settings.shopping_selected_supermarket = null
+                useUserPreferenceStore().updateDeviceSettings()
+            })
+        }
+
         this.autoSyncLoop()
     },
     methods: {
@@ -693,6 +705,10 @@ export default {
                 apiClient.updateSupermarket(this.shopping_list_store.supermarkets[index].id, this.shopping_list_store.supermarkets[index]).then((r) => {
                     StandardToasts.makeStandardToast(this, StandardToasts.SUCCESS_UPDATE)
                     this.shopping_list_store.refreshFromAPI()
+
+                    if (r.data.id === useUserPreferenceStore().device_settings.shopping_selected_supermarket.id){
+                        useUserPreferenceStore().device_settings.shopping_selected_supermarket = r.data
+                    }
                 }).catch((err) => {
                     StandardToasts.makeStandardToast(this, StandardToasts.FAIL_UPDATE, err)
                 })

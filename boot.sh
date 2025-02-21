@@ -29,6 +29,18 @@ if [ -z "${SECRET_KEY}" ]; then
     display_warning "The environment variable 'SECRET_KEY' (or 'SECRET_KEY_FILE' that points to an existing file) is not set but REQUIRED for running Tandoor!"
 fi
 
+if [ -f "${AUTH_LDAP_BIND_PASSWORD_FILE}" ]; then
+    export AUTH_LDAP_BIND_PASSWORD=$(cat "$AUTH_LDAP_BIND_PASSWORD_FILE")
+fi
+
+if [ -f "${EMAIL_HOST_PASSWORD_FILE}" ]; then
+    export EMAIL_HOST_PASSWORD=$(cat "$EMAIL_HOST_PASSWORD_FILE")
+fi
+
+if [ -f "${SOCIALACCOUNT_PROVIDERS_FILE}" ]; then
+    export SOCIALACCOUNT_PROVIDERS=$(cat "$SOCIALACCOUNT_PROVIDERS_FILE")
+fi
+
 
 echo "Waiting for database to be ready..."
 
@@ -67,7 +79,7 @@ echo "Migrating database"
 
 python manage.py migrate
 
-echo "Generating static files"
+echo "Collecting static files, this may take a while..."
 
 python manage.py collectstatic_js_reverse
 python manage.py collectstatic --noinput
@@ -76,4 +88,11 @@ echo "Done"
 
 chmod -R 755 /opt/recipes/mediafiles
 
-exec gunicorn -b "[::]:$TANDOOR_PORT" --workers $GUNICORN_WORKERS --threads $GUNICORN_THREADS --access-logfile - --error-logfile - --log-level $GUNICORN_LOG_LEVEL recipes.wsgi
+ipv6_disable=$(cat /sys/module/ipv6/parameters/disable)
+
+# Check if IPv6 is enabled, only then run gunicorn with ipv6 support
+if [ "$ipv6_disable" -eq 0 ]; then
+    exec gunicorn -b "[::]:$TANDOOR_PORT" --workers $GUNICORN_WORKERS --threads $GUNICORN_THREADS --access-logfile - --error-logfile - --log-level $GUNICORN_LOG_LEVEL recipes.wsgi
+else
+    exec gunicorn -b ":$TANDOOR_PORT" --workers $GUNICORN_WORKERS --threads $GUNICORN_THREADS --access-logfile - --error-logfile - --log-level $GUNICORN_LOG_LEVEL recipes.wsgi
+fi

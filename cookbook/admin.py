@@ -13,10 +13,10 @@ from cookbook.managers import DICTIONARY
 from .models import (BookmarkletImport, Comment, CookLog, Food, ImportLog, Ingredient, InviteLink,
                      Keyword, MealPlan, MealType, NutritionInformation, Property, PropertyType,
                      Recipe, RecipeBook, RecipeBookEntry, RecipeImport, SearchPreference, ShareLink,
-                     ShoppingList, ShoppingListEntry, ShoppingListRecipe, Space, Step, Storage,
+                     ShoppingListEntry, ShoppingListRecipe, Space, Step, Storage,
                      Supermarket, SupermarketCategory, SupermarketCategoryRelation, Sync, SyncLog,
                      TelegramBot, Unit, UnitConversion, UserFile, UserPreference, UserSpace,
-                     ViewLog)
+                     ViewLog, ConnectorConfig)
 
 
 class CustomUserAdmin(UserAdmin):
@@ -93,6 +93,14 @@ class StorageAdmin(admin.ModelAdmin):
 
 
 admin.site.register(Storage, StorageAdmin)
+
+
+class ConnectorConfigAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'type', 'enabled', 'url')
+    search_fields = ('name', 'url')
+
+
+admin.site.register(ConnectorConfig, ConnectorConfigAdmin)
 
 
 class SyncAdmin(admin.ModelAdmin):
@@ -177,7 +185,7 @@ class StepAdmin(admin.ModelAdmin):
     @admin.display(description="Name")
     def recipe_and_name(obj):
         if not obj.recipe_set.exists():
-            return f"Orphaned Step{'':s if not obj.name else f': {obj.name}'}"
+            return "Orphaned Step" + ('' if not obj.name else f': {obj.name}')
         return f"{obj.recipe_set.first().name}: {obj.name}" if obj.name else obj.recipe_set.first().name
 
 
@@ -361,13 +369,6 @@ class ShoppingListEntryAdmin(admin.ModelAdmin):
 admin.site.register(ShoppingListEntry, ShoppingListEntryAdmin)
 
 
-# class ShoppingListAdmin(admin.ModelAdmin):
-#     list_display = ('id', 'created_by', 'created_at')
-
-
-# admin.site.register(ShoppingList, ShoppingListAdmin)
-
-
 class ShareLinkAdmin(admin.ModelAdmin):
     list_display = ('recipe', 'created_by', 'uuid', 'created_at',)
 
@@ -375,10 +376,17 @@ class ShareLinkAdmin(admin.ModelAdmin):
 admin.site.register(ShareLink, ShareLinkAdmin)
 
 
+@admin.action(description='Delete all properties with type')
+def delete_properties_with_type(modeladmin, request, queryset):
+    for pt in queryset:
+        Property.objects.filter(property_type=pt).delete()
+
+
 class PropertyTypeAdmin(admin.ModelAdmin):
-    search_fields = ('space',)
+    search_fields = ('name',)
 
     list_display = ('id', 'space', 'name', 'fdc_id')
+    actions = [delete_properties_with_type]
 
 
 admin.site.register(PropertyType, PropertyTypeAdmin)
